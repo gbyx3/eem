@@ -1,193 +1,274 @@
 # SECURITY_CONCERNS.md
 
-Review target: `env-manager.sh` (sourced Bash TUI; ephemeral env-var manager).
+Living review brief for `env-manager.sh`. This file is written for an
+implementing LLM (OpenCode). It is not a patch.
+
+Audited commit: `258511d` (`Harden environment and terminal handling`).
+Claimed response: `SECURITY_ADDRESSED.md`.
 Tests: `tests/env-manager-test.sh`.
-Do not treat this file as a patch. It is a review brief.
 
-## Reviewer instructions
+Do not re-implement closed items. Confirm each open item against the current
+code, then fix only those. Unrelated worktree changes (logo, `grok_was_here/`)
+are out of scope.
 
-You are reviewing an existing implementation, not writing a new one from scratch.
+## Instructions
 
-1. Read `env-manager.sh` and `tests/env-manager-test.sh` in full before changing anything.
-2. Confirm or refute each finding below against the current code. Cite the function and the exact check or missing check.
-3. Fix confirmed findings. Do not "fix" items you can show are already handled.
-4. Keep the sourced-script contract: the file must remain `source`-only, must still restore prior value/export state, and must not persist secrets to disk.
-5. Do not add a disk-backed secret store, encryption, or a daemon. That is out of scope.
-6. Add or extend tests in `tests/env-manager-test.sh` for every behavioral fix. The current suite does not cover the cases in this document.
-7. After edits, `bash tests/env-manager-test.sh` must pass.
-8. Do not rewrite the TUI unless a finding requires it.
+1. Read `env-manager.sh` and `tests/env-manager-test.sh` in full first.
+2. Treat the **Open follow-ups** section as the work queue. Closed items are
+   context, not a request to rewrite them.
+3. Keep the sourced-script contract. No disk-backed secret store, encryption,
+   or daemon.
+4. Add or extend tests in `tests/env-manager-test.sh` for every behavioral
+   fix. Do not add a second test framework. Keep
+   `source "$ROOT/env-manager.sh" <<< 'E'`.
+5. `bash tests/env-manager-test.sh` must pass. Direct execution of
+   `env-manager.sh` must still fail with the source hint.
+6. Do not rewrite the TUI unless a finding requires it.
+7. Do not expand the README unless you add user-visible behavior.
 
-Scope limits:
+Scope:
 
-- This tool runs in an already-trusted interactive user shell. Do not try to defend against a fully compromised user account.
-- Do defend against: accidental overwrite of shell-critical names, nameref write-through, terminal escape injection from user-supplied strings, interrupt leaving the tty unusable, and UI commands being hijacked via `PATH`.
-- "Secret" in this program means "mask in the list view + `read -s`". Do not claim encryption. You may document residual exposure; you do not need to eliminate `/proc/<pid>/environ` visibility.
+- Trusted interactive user shell. Do not defend a compromised account.
+- Do defend: shell-critical / loader names, nameref write-through, terminal
+  control injection, interrupt leaving the tty unusable, UI helpers hijacked
+  via `PATH`.
+- "Secret" means masked listing + `read -s`. Do not claim encryption. Do not
+  try to hide `/proc/<pid>/environ`.
 
 ## Program contract (do not break)
 
-- Must be sourced. Direct execution must refuse and exit.
-- Requires Bash 4+.
-- Public API used by tests: `em_set`, `em_delete_key`, `em_delete_app`, `em_delete_all`, `_em_app_prefix`, `_em_list`, `_em_add_menu`.
-- `em_set APP KEY VALUE SECRET` exports `KEY=VALUE` and records metadata so delete can restore the pre-management state.
-- `SECRET` is `0` or `1`. Listings must mask `1`.
-- Re-sourcing must not wipe in-memory session maps (`_EM_APP`, `_EM_SECRET`, `_EM_ORIGINAL_*`, order arrays).
-- Variable names must remain valid shell identifiers: `^[A-Za-z_][A-Za-z0-9_]*$`.
-- No `eval`. Assign with `printf -v` / `export` / `unset` on a validated name only.
+- Source-only. Direct execution refuses and exits.
+- Bash 4+.
+- Public API used by tests: `em_set`, `em_delete_key`, `em_delete_app`,
+  `em_delete_all`, `_em_app_prefix`, `_em_list`, `_em_add_menu`.
+- `em_set APP KEY VALUE SECRET` exports `KEY=VALUE` and records metadata so
+  delete restores the pre-management value and export flag.
+- `SECRET` is `0` or `1`. Listings must mask `1`. Stored values must not be
+  altered by display sanitization.
+- Re-sourcing must not wipe `_EM_APP`, `_EM_SECRET`, `_EM_ORIGINAL_*`, or the
+  order arrays.
+- Names remain `^[A-Za-z_][A-Za-z0-9_]*$`.
+- No `eval`. Assign with `declare -g` / `export` / `unset` on a validated
+  name only.
 - No persistence to disk.
 
-## Findings
+## Audit of 258511d
 
-Each item is independently actionable. Severity is for triage, not a request to inflate the design.
+Independent review of `258511d` plus live checks on Bash 5.3. Official suite
+printed `All tests passed.` Direct execution exited 1 with the source hint.
+Restore-on-delete, secret masking, and no-disk still hold.
 
-### F1 — Dangerous variable names are accepted
+| ID | Status | Notes |
+|---|---|---|
+| F1 | CLOSED | Denylist + identifier regex. `tput`/`tr` removed. `declare -gx` avoids dynamic-scope locals. Required names rejected. |
+| F2 | CLOSED | `declare -p` flag group + `*[aArn]*`. `-n` and `-nx` rejected. Target unchanged. |
+| F3 | PARTIAL | Default path restores alt-screen and echo, clears owned traps, does not `exit`. Parent-trap fallback still leaves `read -s` unprotected. |
+| F4 | CLOSED | Display sanitizer strips C0/DEL/C1. App names with controls rejected. Stored values unchanged. |
+| F5 | UNCHANGED | Session-wide export is the product. Leave it. |
+| F6 | UNCHANGED | Re-source reloads functions. Leave it. |
+| F7 | PARTIAL | Tests cover the original F1/F2/F4 cases and trap cleanup. They do not cover the open follow-ups. |
 
-Severity: high
-Where: `em_set` (validation is only `_em_valid_key`)
-Problem: Any valid identifier can be managed, including names that change shell or child-process security:
+Do not reopen F1/F2/F4 from scratch. Residual holes under those IDs are listed
+as new follow-ups below.
 
-- `PATH`, `CDPATH`
-- `IFS`
-- `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`
-- `BASH_ENV`, `ENV`
-- `PROMPT_COMMAND`, `PS0`, `PS1`, `PS2`, `PS4`
-- `HISTFILE`, `HISTCONTROL`
-- `HOME`, `SHELL`, `USER`
-- `SHELLOPTS`, `BASHOPTS`, `BASH_XTRACEFD`
-- the script's own `_EM_*` scalars (`_EM_UI_ACTIVE`, `_EM_UI_LEFT`, `_EM_FRAME_WIDTH`, `_EM_FRAME_PADDING`)
+Verified live (not only the existing assertions):
 
-`PATH` is additionally a live UI hazard: `_em_screen` calls `tput` and `tr` without `command` or an absolute path. If the user sets `PATH` from the menu, later draws can execute attacker-controlled binaries.
+- `em_set app PATH /tmp 0` fails; `PATH` unchanged.
+- `EM_APP_PATH` and `OPENAI_API_KEY` still succeed.
+- `em_set app value global 0` sets a global, not a function local.
+- Nameref and `declare -nx` nameref rejected; target unchanged.
+- `declare -- VAR=...` still sets and restores.
+- `_em_list` listing of ESC/OSC/BEL/CR/LF/TAB/DEL/NEL/C1 has no raw control
+  bytes in the value field. Stored value kept.
+- App name with ESC or LF rejected.
+- Pty `SIGINT` at the main menu: shell survived, `_EM_UI_ACTIVE=0`, no leftover
+  INT trap.
+- Parent INT trap: alternate screen skipped, parent trap preserved.
+- `$(trap -p INT)` on Bash 5.3 still sees the parent trap (not the pre-4.2
+  empty-subshell gotcha). Detection can work; the remaining bug is fallback
+  policy.
 
-Required change:
+`email` is allowed. `em_*` only matches names with `em_` plus more
+(`em_token`). Do not "fix" `email`.
 
-- Reject a denylist of shell-critical and loader-critical names in `em_set` (case-sensitive exact match).
-- Also reject any name that is already used as this script's metadata (`_EM_*` and public `em_*` / `env_manager` identifiers you do not want overwritten).
-- Keep the identifier regex. The denylist is in addition to it, not a replacement.
-- Call `tput` and `tr` via `command tput` / `command tr` so a later `PATH` change cannot retarget UI helpers even if a denylist hole remains.
+## Open follow-ups
 
-Tests to add:
+These are independently actionable. Fix them in `env-manager.sh` and extend
+`tests/env-manager-test.sh`.
 
-- `em_set app PATH /tmp 0` fails and does not change `PATH`.
-- `em_set app LD_PRELOAD /tmp/x.so 0` fails.
-- `em_set app PROMPT_COMMAND 'id' 0` fails.
-- `em_set app _EM_UI_ACTIVE 1 0` fails.
-- A normal name such as `OPENAI_API_KEY` still succeeds.
-
-### F2 — Namerefs (`declare -n`) are not rejected
-
-Severity: high
-Where: `em_set`, the `declare -p` flag check:
-
-```bash
-if [[ $declaration =~ ^declare\ -[^\ ]*[arA] ]]; then
-```
-
-Problem: That regex rejects arrays (`a`), read-only (`r`), and associative arrays (`A`). It does not reject namerefs (`n`). `printf -v "$key"` on a nameref writes through to the referenced variable (for example a name `foo` that points at `PATH`).
-
-Required change:
-
-- Treat nameref the same as array/read-only: refuse to manage it.
-- Prefer parsing `declare -p` flags in a way that cannot miss `n` if flags are reordered (do not assume `-n` is the only flag or that `n` appears in a fixed position).
-
-Tests to add:
-
-- Create `declare -n EM_TEST_REF=PATH` (or another throwaway target), call `em_set`, assert failure, assert the target variable is unchanged, then unset the nameref.
-
-### F3 — No trap to restore the terminal
+### O1 — Echo not restored when a parent trap exists
 
 Severity: medium
-Where: `_em_ui_start`, `_em_ui_stop`, `_em_read` (`read -s`), `env_manager`
-Problem:
+Status: open (remaining F3 hole)
+Where: `_em_ui_start` (early return when `trap -p INT` or `TERM` is set),
+`_em_ui_restore_terminal` (no-ops unless `_EM_UI_ACTIVE || _EM_UI_TRAPS`),
+`_em_read` silent path (`read -s` around line 430)
 
-- Alternate screen is enabled with `\033[?1049h` and only disabled on a clean `_em_ui_stop`.
-- Secret input uses `read -s`, which disables terminal echo.
-- There is no `EXIT` / `INT` / `TERM` trap. Ctrl-C during the menu can leave the user in the alternate screen. Ctrl-C during `read -s` can leave echo off (`stty -echo`).
+If the parent shell already has an INT or TERM trap, start skips
+`_EM_UI_TRAPS` and `_EM_UI_ACTIVE` but the menu still uses `read -s`. Ctrl-C
+runs the parent trap. `_EM_UI_INTERRUPTED` stays 0. `_em_ui_stop` then
+no-ops and never runs `stty echo`. Interactive rc files that install an INT
+trap hit this.
 
 Required change:
 
-- Install traps when the UI starts; always restore alternate screen and echo on exit, interrupt, or return from `env_manager`.
-- Do not leave traps that affect the parent shell after a normal menu exit. Restore prior trap state or use a scoped pattern appropriate for a sourced script.
-- A sourced script must not `exit` the user's shell from a trap on a clean return. Use `return` from `env_manager` / `_em_ui_stop` as you do today.
+- Always restore echo from `_em_ui_stop` / `_em_ui_restore_terminal`, even
+  when this script does not own the alternate screen.
+- Keep the rule: do not overwrite a parent INT/TERM trap. Acceptable
+  patterns: wrap the parent action (save, install a handler that restores
+  the tty then runs the saved action), or restore echo without installing
+  traps.
+- Do not `exit` the parent shell from a trap.
+- Remove only traps this script installed.
 
 Tests:
 
-- Automated tests cannot easily assert tty state. Add a comment in code near the trap documenting the restore obligations, and manually reason about: UI start → trap set → `_em_ui_stop` → trap cleared; and UI start → simulated INT path → screen/echo restore functions still run.
-- If you can unit-test the restore helpers without a tty, do so. Do not skip the trap because tests are hard.
+- `_EM_UI_ACTIVE=0` and `_EM_UI_TRAPS=0`; call restore/stop; assert the
+  restore helper still attempts echo (unit-test the gate, even without a
+  tty).
+- With a dummy parent `trap true INT`, sourcing still must not replace that
+  trap.
 
-### F4 — User-controlled strings are printed raw to the terminal
+### O2 — `_EM_UI_INTERRUPTED` sticks
 
 Severity: medium
-Where: `_em_screen`, `_em_list`, any path that prints application names or non-secret values
-Problem: Application names and values are not stripped of `ESC` (0x1b), `CR`, or other C0/C1 control characters. A value or app name can inject CSI/OSC sequences, move the cursor, spoof the frame, or (on some terminals) trigger OSC handlers. Newlines in an application name also break the one-app-per-section listing.
+Status: open
+Where: `_em_ui_interrupt` sets the flag; `_em_ui_stop` never clears it;
+`_em_ui_start` only clears it after the tty and parent-trap checks succeed
+
+After a real interrupt, a later `env_manager` whose start returns early
+(parent trap, or not a tty) skips the menu: `while (( !_EM_UI_INTERRUPTED ))`.
 
 Required change:
 
-- Sanitize strings before they are drawn or listed. Strip or replace ASCII control characters (at least `ESC`, `CR`, `NEL`, and C1). Decide whether a newline in an application name is rejected at input time or flattened for display; do not let it break grouping.
-- Do not alter the stored value of a secret or non-secret variable — sanitize for display only, unless you also reject controls at `em_set` / app-name input. Prefer reject-at-input for application names; display-sanitize for values.
-- Keep wrapping based on visible/printable width after sanitizing, not on raw byte length that includes escapes.
+- Set `_EM_UI_INTERRUPTED=0` at the top of `_em_ui_start` (before any early
+  return) and in `_em_ui_stop`.
 
-Tests to add:
+Test:
 
-- Application name containing `$'\e[31m'` does not appear with a raw ESC in `_em_list` / screen output (or is rejected).
-- Non-secret value containing CSI does not leak ESC into `_em_list` output (or is rejected by `em_set`).
-- A legitimate value with spaces and punctuation still lists correctly.
+- Set `_EM_UI_INTERRUPTED=1`, install a dummy INT trap, call `_em_ui_start`,
+  assert the flag is 0.
 
-### F5 — Session-wide export is easy to over-share
+### O3 — Loader / locale denylist gaps
 
-Severity: low (design; document + optional guard, do not redesign)
-Where: `em_set` always `export`s
-Problem: There is no `KEY=value command` scope. After the menu exits, every subsequent process in that shell inherits every managed secret.
+Severity: high
+Status: open (F1 residual; original required names are already blocked)
+Where: `_em_safe_key`
 
-Required change:
+Still allowed, same "export and every child inherits it" class as
+`LD_PRELOAD`:
 
-- Do not add a wrapper-exec mode unless it is a small, obvious extra menu option. Default behavior stays "export into this shell".
-- If you add anything, add a one-line warning on the main menu or on secret save: secrets are inherited by all child processes of this shell.
-- README already states this. Do not expand the README unless you add new user-visible behavior.
+- `GCONV_PATH` — iconv module search path; arbitrary `.so` load
+- `GLIBC_TUNABLES` — malloc/rtld hardening; exploitation primitive
+- `LOCPATH` — locale object search path
+- `NLSPATH` — message-catalog path
+- `BASH_LOADABLES_PATH` — retargets `enable -f`
 
-### F6 — Re-source replaces functions from whatever is on disk
+Also still allowed, lower severity, fix in the same change if cheap:
+
+- `LANG`, `LC_ALL`, `LC_CTYPE` (and other `LC_*`) — can change character
+  classes and sanitizer width
+- `COLUMNS`, `LINES` — now drive `_em_screen` geometry
+
+Keep the identifier regex. Exact case-sensitive match, plus the existing
+`_EM_*` / `_em_*` globs.
+
+Do not broaden `em_*` further. Do not block `email`.
+
+Tests to add (same loop style as `PATH` / `LD_PRELOAD`):
+
+- `GCONV_PATH`, `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`,
+  `BASH_LOADABLES_PATH` rejected.
+- `OPENAI_API_KEY` and `email` still allowed.
+- Prefixed `EM_APP_PATH` still allowed.
+
+### O4 — Nameref not rechecked on update
 
 Severity: low
-Where: top-level re-source; maps are preserved, functions are redefined
-Problem: A second `source ./env-manager.sh` keeps `_EM_*` maps but reloads function bodies from the current file. A replaced file can redefine `em_set` / `_em_restore_key` while secrets are still in memory.
+Status: open (F2 residual)
+Where: `em_set`, the `[[ ! -v _EM_APP[$2] ]]` first-insert branch
+
+Nameref / array / read-only rejection runs only on first manage. A later
+`unset KEY; declare -n KEY=TARGET` then `em_set` replace does
+`declare -gx -- "$2=$3"` and writes through the nameref.
 
 Required change:
 
-- Optional only. Acceptable mitigations: refuse to redefine functions if maps are already populated, or warn on re-source that the file will be re-read.
-- Do not add signature checking or a package manager.
+- Run the `declare -p` / `*[aArn]*` check on every `em_set`, not only the
+  first insert.
 
-### F7 — Tests do not cover hostile cases
+Test:
+
+- Manage a scalar, convert it to `declare -n` pointing at a throwaway
+  target, `em_set` again, assert failure and target unchanged.
+
+### O5 — Tests do not cover O1–O4
 
 Severity: medium (process)
+Status: open
 Where: `tests/env-manager-test.sh`
-Problem: Current tests cover prefix normalization, assign/restore/export flags, and secret masking. They do not cover F1–F4.
 
-Required change:
+Add coverage listed under O1–O4. Clean up every test variable.
 
-- Extend the existing test file. Do not add a second framework.
-- Keep the `source "$ROOT/env-manager.sh" <<< 'E'` pattern so the auto-started menu exits.
-- Clean up every test variable you create.
+## Closed (do not rework)
 
-## Out of scope (do not implement)
+### F1 original list — closed
+
+`_em_safe_key` rejects `PATH`, `CDPATH`, `IFS`, `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, `LD_AUDIT`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`,
+`PS0`–`PS4`, `HISTFILE`, `HISTCONTROL`, `HOME`, `SHELL`, `USER`,
+`SHELLOPTS`, `BASHOPTS`, `BASH_XTRACEFD`, and related specials, plus
+`_EM_*` / `_em_*` / `em_*` / `env_manager`. `_em_screen` no longer calls
+`tput` or `tr`. Assignment is `declare -gx -- "$2=$3"`.
+
+### F2 first-insert nameref — closed
+
+Flag parse is position-independent. First `em_set` on a nameref fails
+before metadata or assignment.
+
+### F3 default interrupt path — closed
+
+No parent trap: INT/TERM installed before `\033[?1049h`; restore uses
+`/usr/bin/stty` or `/bin/stty` and `\033[?1049l`; owned traps cleared;
+no `exit`. Remaining work is O1 and O2.
+
+### F4 display injection — closed
+
+`_em_sanitize_display` strips C0, DEL, C1. `_em_valid_app` rejects names
+that change under sanitizing. `_em_list` / `_em_screen` sanitize before
+wrap/print. Values are not rewritten in the environment.
+
+Residual, do not treat as a must-fix unless you are already in the
+sanitizer: printable leftovers such as `[31m` after ESC is stripped;
+U+202E bidi override is kept. Optional: sanitize by byte under `LC_ALL=C`.
+
+## Intentionally unchanged
+
+- F5: no command-scoped `KEY=value command` mode.
+- F6: no re-source integrity check.
+
+## Out of scope
 
 - Encrypting values in memory or on disk.
-- Wiping Bash heap/swap after `unset`.
-- Preventing a local user from reading their own `/proc/self/environ`.
+- Wiping the Bash heap after `unset`.
+- Hiding `/proc/self/environ`.
 - Multi-user access control.
-- Prompting for a master password.
-- Rewriting the program in another language.
+- Master password.
+- Rewriting in another language.
 
-## Suggested implementation order
+## Suggested order
 
-1. F2 nameref reject (small, high confidence).
-2. F1 denylist + `command tput` / `command tr`.
-3. F4 display/input sanitization.
-4. F3 trap + tty restore.
-5. Tests for F1, F2, F4 (and F3 helpers if testable).
-6. F5 warning only if you touch the main menu anyway.
-7. F6 only if it is a few lines and does not break re-open-the-menu.
+1. O3 denylist additions (small, high confidence).
+2. O2 clear `_EM_UI_INTERRUPTED`.
+3. O1 always restore echo; do not clobber parent traps.
+4. O4 nameref check on update.
+5. Tests for O1–O4.
 
 ## Acceptance
 
-- `bash tests/env-manager-test.sh` passes.
-- Confirmed findings have a code change or an explicit written reason they are invalid.
-- Sourced usage, restore-on-delete, secret masking, and no-disk persistence still hold.
-- Direct execution of `env-manager.sh` still fails with the source hint.
+- `bash -n env-manager.sh` and `bash tests/env-manager-test.sh` pass.
+- Direct execution still fails with the source hint.
+- Each open item has a code change or a written reason it is invalid.
+- Closed F1/F2/F4 behavior above still holds.
+- Parent INT/TERM traps are not replaced.
+- `email` remains a legal variable name.
