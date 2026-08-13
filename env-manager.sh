@@ -28,6 +28,7 @@ _EM_UI_ACTIVE=0
 _EM_UI_LEFT=0
 _EM_UI_INTERRUPTED=0
 _EM_UI_TRAPS=0
+_EM_TTY_STATE=''
 _EM_FRAME_WIDTH=76
 _EM_FRAME_PADDING=3
 
@@ -40,26 +41,33 @@ _EM_LOGO=(
 )
 
 _em_ui_start() {
+  _EM_UI_INTERRUPTED=0
+  _EM_TTY_STATE=''
   [[ -t 0 && -t 1 ]] || return
+  _EM_TTY_STATE=$(_em_stty -g 2>/dev/null) || _EM_TTY_STATE=''
   # Do not replace traps owned by the parent shell. In that uncommon case the
   # plain UI avoids creating terminal state that this script cannot own safely.
   if [[ -n $(trap -p INT) || -n $(trap -p TERM) ]]; then
     return
   fi
-  _EM_UI_INTERRUPTED=0
   _EM_UI_TRAPS=1
   trap '_em_ui_interrupt' INT TERM
   _EM_UI_ACTIVE=1
   printf '\033[?1049h'
 }
 
-_em_ui_restore_terminal() {
-  (( _EM_UI_ACTIVE || _EM_UI_TRAPS )) || return
+_em_stty() {
   if [[ -x /usr/bin/stty ]]; then
-    /usr/bin/stty echo 2>/dev/null || :
+    /usr/bin/stty "$@"
   elif [[ -x /bin/stty ]]; then
-    /bin/stty echo 2>/dev/null || :
+    /bin/stty "$@"
+  else
+    return 127
   fi
+}
+
+_em_ui_restore_terminal() {
+  [[ -n $_EM_TTY_STATE ]] && _em_stty "$_EM_TTY_STATE" 2>/dev/null || :
   (( _EM_UI_ACTIVE )) && printf '\033[?1049l'
   _EM_UI_ACTIVE=0
 }
@@ -75,6 +83,8 @@ _em_ui_stop() {
     trap - INT TERM
     _EM_UI_TRAPS=0
   fi
+  _EM_UI_INTERRUPTED=0
+  _EM_TTY_STATE=''
 }
 
 _em_sanitize_display() {
@@ -90,96 +100,98 @@ _em_sanitize_display() {
 }
 
 _em_screen() {
-  local title=$1 block line segment cols rows top frame_width inner_width _em_i
-  local content_height logo_height=0 logo_left border padding
-  local -a raw_lines=() lines=()
+  local _em_title=$1 _em_block _em_line _em_segment _em_cols _em_rows _em_top
+  local _em_frame_width _em_inner_width _em_i _em_content_height
+  local _em_logo_height=0 _em_logo_left _em_border _em_padding
+  local -a _em_raw_lines=() _em_lines=()
   shift
 
-  for block in "$@"; do
-    while IFS= read -r line; do
-      line=$(_em_sanitize_display "$line")
-      raw_lines+=("$line")
-    done <<< "$block"
+  for _em_block in "$@"; do
+    while IFS= read -r _em_line; do
+      _em_line=$(_em_sanitize_display "$_em_line")
+      _em_raw_lines+=("$_em_line")
+    done <<< "$_em_block"
   done
 
   if (( ! _EM_UI_ACTIVE )); then
-    printf '\n%s\n' "$title"
-    for line in "${raw_lines[@]}"; do printf '%s\n' "$line"; done
+    printf '\n%s\n' "$_em_title"
+    for _em_line in "${_em_raw_lines[@]}"; do printf '%s\n' "$_em_line"; done
     return
   fi
 
-  [[ ${COLUMNS:-} =~ ^[0-9]+$ ]] && cols=$COLUMNS || cols=80
-  [[ ${LINES:-} =~ ^[0-9]+$ ]] && rows=$LINES || rows=24
-  frame_width=$_EM_FRAME_WIDTH
-  ((frame_width > cols - 2)) && frame_width=$((cols - 2))
-  ((frame_width < 12)) && frame_width=12
-  padding=$_EM_FRAME_PADDING
-  ((frame_width < 2 * padding + 4)) && padding=1
-  inner_width=$((frame_width - 2 - 2 * padding))
+  [[ ${COLUMNS:-} =~ ^[0-9]+$ ]] && _em_cols=$COLUMNS || _em_cols=80
+  [[ ${LINES:-} =~ ^[0-9]+$ ]] && _em_rows=$LINES || _em_rows=24
+  _em_frame_width=$_EM_FRAME_WIDTH
+  ((_em_frame_width > _em_cols - 2)) && _em_frame_width=$((_em_cols - 2))
+  ((_em_frame_width < 12)) && _em_frame_width=12
+  _em_padding=$_EM_FRAME_PADDING
+  ((_em_frame_width < 2 * _em_padding + 4)) && _em_padding=1
+  _em_inner_width=$((_em_frame_width - 2 - 2 * _em_padding))
 
-  for line in "$title" '' "${raw_lines[@]}"; do
-    if [[ -z $line ]]; then
-      lines+=('')
+  for _em_line in "$_em_title" '' "${_em_raw_lines[@]}"; do
+    if [[ -z $_em_line ]]; then
+      _em_lines+=('')
       continue
     fi
-    while ((${#line} > inner_width)); do
-      segment=${line:0:inner_width}
-      lines+=("$segment")
-      line=${line:inner_width}
+    while ((${#_em_line} > _em_inner_width)); do
+      _em_segment=${_em_line:0:_em_inner_width}
+      _em_lines+=("$_em_segment")
+      _em_line=${_em_line:_em_inner_width}
     done
-    lines+=("$line")
+    _em_lines+=("$_em_line")
   done
 
-  _EM_UI_LEFT=$(((cols - frame_width) / 2))
+  _EM_UI_LEFT=$(((_em_cols - _em_frame_width) / 2))
   ((_EM_UI_LEFT < 0)) && _EM_UI_LEFT=0
-  [[ $title == 'Environment Manager' ]] && logo_height=$((${#_EM_LOGO[@]} + 1))
-  content_height=$((${#lines[@]} + 4 + logo_height))
-  top=$(((rows - content_height) / 2))
-  ((top < 0)) && top=0
-  printf -v border '%*s' "$((frame_width - 2))" ''
-  border=${border// /-}
+  [[ $_em_title == 'Environment Manager' ]] && _em_logo_height=$((${#_EM_LOGO[@]} + 1))
+  _em_content_height=$((${#_em_lines[@]} + 4 + _em_logo_height))
+  _em_top=$(((_em_rows - _em_content_height) / 2))
+  ((_em_top < 0)) && _em_top=0
+  printf -v _em_border '%*s' "$((_em_frame_width - 2))" ''
+  _em_border=${_em_border// /-}
 
   printf '\033[2J\033[H'
-  for ((_em_i = 0; _em_i < top; _em_i++)); do printf '\n'; done
-  if ((logo_height)); then
-    for line in "${_EM_LOGO[@]}"; do
-      logo_left=$(((cols - ${#line}) / 2))
-      ((logo_left < 0)) && logo_left=0
-      printf '%*s%s\n' "$logo_left" '' "$line"
+  for ((_em_i = 0; _em_i < _em_top; _em_i++)); do printf '\n'; done
+  if ((_em_logo_height)); then
+    for _em_line in "${_EM_LOGO[@]}"; do
+      _em_logo_left=$(((_em_cols - ${#_em_line}) / 2))
+      ((_em_logo_left < 0)) && _em_logo_left=0
+      printf '%*s%s\n' "$_em_logo_left" '' "$_em_line"
     done
     printf '\n'
   fi
-  printf '%*s+%s+\n' "$_EM_UI_LEFT" '' "$border"
-  printf '%*s|%*s|\n' "$_EM_UI_LEFT" '' "$((frame_width - 2))" ''
-  for line in "${lines[@]}"; do
+  printf '%*s+%s+\n' "$_EM_UI_LEFT" '' "$_em_border"
+  printf '%*s|%*s|\n' "$_EM_UI_LEFT" '' "$((_em_frame_width - 2))" ''
+  for _em_line in "${_em_lines[@]}"; do
     printf '%*s|%*s%-*s%*s|\n' \
-      "$_EM_UI_LEFT" '' "$padding" '' "$inner_width" "$line" "$padding" ''
+      "$_EM_UI_LEFT" '' "$_em_padding" '' "$_em_inner_width" "$_em_line" "$_em_padding" ''
   done
-  printf '%*s|%*s|\n' "$_EM_UI_LEFT" '' "$((frame_width - 2))" ''
-  printf '%*s+%s+\n' "$_EM_UI_LEFT" '' "$border"
-  _EM_UI_LEFT=$((_EM_UI_LEFT + 1 + padding))
+  printf '%*s|%*s|\n' "$_EM_UI_LEFT" '' "$((_em_frame_width - 2))" ''
+  printf '%*s+%s+\n' "$_EM_UI_LEFT" '' "$_em_border"
+  _EM_UI_LEFT=$((_EM_UI_LEFT + 1 + _em_padding))
 }
 
 _em_read() {
-  local __name=$1 prompt=$2 silent=${3:-0} status
+  local _em_name=$1 _em_prompt=$2 _em_silent=${3:-0} _em_status
   (( _EM_UI_INTERRUPTED )) && return 130
   if (( _EM_UI_ACTIVE )); then
     printf '%*s' "$_EM_UI_LEFT" ''
   fi
-  if (( silent )); then
-    read -r -s -p "$prompt" "$__name"
-    status=$?
+  if (( _em_silent )); then
+    read -r -s -p "$_em_prompt" "$_em_name"
+    _em_status=$?
+    [[ -n $_EM_TTY_STATE ]] && _em_stty "$_EM_TTY_STATE" 2>/dev/null || :
   else
-    read -r -p "$prompt" "$__name"
-    status=$?
+    read -r -p "$_em_prompt" "$_em_name"
+    _em_status=$?
   fi
   (( _EM_UI_INTERRUPTED )) && return 130
-  return "$status"
+  return "$_em_status"
 }
 
 _em_pause() {
-  local ignored
-  _em_read ignored 'Press Enter to return to the main menu...'
+  local _em_ignored
+  _em_read _em_ignored 'Press Enter to return to the main menu...'
 }
 
 _em_valid_key() {
@@ -189,14 +201,29 @@ _em_valid_key() {
 _em_safe_key() {
   case $1 in
     PATH|CDPATH|IFS|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|BASH_ENV|ENV|\
+    GCONV_PATH|GLIBC_TUNABLES|LOCPATH|NLSPATH|BASH_LOADABLES_PATH|\
     PROMPT_COMMAND|PS0|PS1|PS2|PS4|HISTFILE|HISTCONTROL|HOME|SHELL|USER|\
     SHELLOPTS|BASHOPTS|BASH_XTRACEFD|BASH_COMPAT|GLOBIGNORE|INPUTRC|TMOUT|\
     OPTIND|RANDOM|SRANDOM|SECONDS|LINENO|BASHPID|BASH_SUBSHELL|EUID|UID|\
     PPID|FUNCNAME|BASH_SOURCE|BASH_LINENO|GROUPS|DIRSTACK|PIPESTATUS|\
+    LANG|LC_*|COLUMNS|LINES|\
     _EM_*|_em_*|em_*|env_manager)
       return 1
       ;;
   esac
+  return 0
+}
+
+_em_safe_attributes() {
+  local _em_declaration _em_flags
+  if _em_declaration=$(declare -p "$1" 2>/dev/null); then
+    _em_flags=${_em_declaration#declare -}
+    _em_flags=${_em_flags%% *}
+    if [[ $_em_flags == *[aArn]* ]]; then
+      printf '%s is an array, read-only variable, or nameref and cannot be managed.\n' "$1" >&2
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -205,39 +232,39 @@ _em_valid_app() {
 }
 
 _em_app_prefix() {
-  local prefix=${1^^}
-  prefix=${prefix//[^A-Z0-9_]/_}
-  while [[ $prefix == *__* ]]; do
-    prefix=${prefix//__/_}
+  local _em_prefix=${1^^}
+  _em_prefix=${_em_prefix//[^A-Z0-9_]/_}
+  while [[ $_em_prefix == *__* ]]; do
+    _em_prefix=${_em_prefix//__/_}
   done
-  prefix=${prefix#_}
-  prefix=${prefix%_}
-  [[ -n $prefix ]] || prefix=APP
-  printf 'EM_%s_' "$prefix"
+  _em_prefix=${_em_prefix#_}
+  _em_prefix=${_em_prefix%_}
+  [[ -n $_em_prefix ]] || _em_prefix=APP
+  printf 'EM_%s_' "$_em_prefix"
 }
 
 _em_has_app() {
-  local app=$1 key
-  for key in "${!_EM_APP[@]}"; do
-    [[ ${_EM_APP[$key]} == "$app" ]] && return 0
+  local _em_app_name=$1 _em_var_name
+  for _em_var_name in "${!_EM_APP[@]}"; do
+    [[ ${_EM_APP[$_em_var_name]} == "$_em_app_name" ]] && return 0
   done
   return 1
 }
 
 _em_remember_app() {
-  local app=$1 existing
-  for existing in "${_EM_APP_ORDER[@]}"; do
-    [[ $existing == "$app" ]] && return
+  local _em_app_name=$1 _em_existing
+  for _em_existing in "${_EM_APP_ORDER[@]}"; do
+    [[ $_em_existing == "$_em_app_name" ]] && return
   done
-  _EM_APP_ORDER+=("$app")
+  _EM_APP_ORDER+=("$_em_app_name")
 }
 
 _em_remember_key() {
-  local key=$1 existing
-  for existing in "${_EM_KEY_ORDER[@]}"; do
-    [[ $existing == "$key" ]] && return
+  local _em_var_name=$1 _em_existing
+  for _em_existing in "${_EM_KEY_ORDER[@]}"; do
+    [[ $_em_existing == "$_em_var_name" ]] && return
   done
-  _EM_KEY_ORDER+=("$key")
+  _EM_KEY_ORDER+=("$_em_var_name")
 }
 
 em_set() {
@@ -263,15 +290,12 @@ em_set() {
     printf '%s is already managed under %s.\n' "$2" "${_EM_APP[$2]}" >&2
     return 1
   fi
+  _em_safe_attributes "$2" || return 1
 
   if [[ ! -v _EM_APP[$2] ]]; then
     if _em_declaration=$(declare -p "$2" 2>/dev/null); then
       _em_flags=${_em_declaration#declare -}
       _em_flags=${_em_flags%% *}
-      if [[ $_em_flags == *[aArn]* ]]; then
-        printf '%s is an array, read-only variable, or nameref and cannot be managed.\n' "$2" >&2
-        return 1
-      fi
       _EM_ORIGINAL_STATE[$2]=set
       _EM_ORIGINAL_VALUE[$2]=${!2}
       [[ $_em_flags == *x* ]] && _EM_ORIGINAL_EXPORTED[$2]=1 || _EM_ORIGINAL_EXPORTED[$2]=0
@@ -291,6 +315,7 @@ em_set() {
 
 _em_restore_key() {
   [[ -v _EM_APP[$1] ]] || return 1
+  _em_safe_attributes "$1" || return 1
 
   if [[ ${_EM_ORIGINAL_STATE[$1]} == set ]]; then
     if [[ ${_EM_ORIGINAL_EXPORTED[$1]} == 1 ]]; then
@@ -315,28 +340,28 @@ em_delete_key() {
 }
 
 em_delete_app() {
-  local app=${1-} key failed=0 found=0
-  for key in "${_EM_KEY_ORDER[@]}"; do
-    if [[ -v _EM_APP[$key] && ${_EM_APP[$key]} == "$app" ]]; then
-      found=1
-      _em_restore_key "$key" || failed=1
+  local _em_app_name=${1-} _em_var_name _em_failed=0 _em_found=0
+  for _em_var_name in "${_EM_KEY_ORDER[@]}"; do
+    if [[ -v _EM_APP[$_em_var_name] && ${_EM_APP[$_em_var_name]} == "$_em_app_name" ]]; then
+      _em_found=1
+      _em_restore_key "$_em_var_name" || _em_failed=1
     fi
   done
-  if (( ! found )); then
-    printf 'No managed application named %s.\n' "$app" >&2
+  if (( ! _em_found )); then
+    printf 'No managed application named %s.\n' "$_em_app_name" >&2
     return 1
   fi
-  return "$failed"
+  return "$_em_failed"
 }
 
 em_delete_all() {
-  local key failed=0
-  for key in "${_EM_KEY_ORDER[@]}"; do
-    if [[ -v _EM_APP[$key] ]]; then
-      _em_restore_key "$key" || failed=1
+  local _em_var_name _em_failed=0
+  for _em_var_name in "${_EM_KEY_ORDER[@]}"; do
+    if [[ -v _EM_APP[$_em_var_name] ]]; then
+      _em_restore_key "$_em_var_name" || _em_failed=1
     fi
   done
-  return "$failed"
+  return "$_em_failed"
 }
 
 _em_list() {
@@ -361,143 +386,144 @@ _em_list() {
 }
 
 _em_confirm() {
-  local prompt=$1 answer
-  _em_read answer "$prompt [y/N] "
-  [[ $answer == [yY] || $answer == [yY][eE][sS] ]]
+  local _em_prompt=$1 _em_answer
+  _em_read _em_answer "$_em_prompt [y/N] "
+  [[ $_em_answer == [yY] || $_em_answer == [yY][eE][sS] ]]
 }
 
 _em_add_menu() {
-  local app key input_key value secret answer naming prefix
+  local _em_app_name _em_var_name _em_input_key _em_value _em_secret
+  local _em_answer _em_naming _em_prefix
   _em_screen 'Add or update variables' \
     'Use an existing application name to add or replace its variables.' ''
-  _em_read app 'Application/system name: ' || return
-  if ! _em_valid_app "$app"; then
+  _em_read _em_app_name 'Application/system name: ' || return
+  if ! _em_valid_app "$_em_app_name"; then
     _em_screen 'Add or update variables' \
       'Application name is required and cannot contain control characters.' ''
     _em_pause
     return
   fi
 
-  prefix=$(_em_app_prefix "$app")
+  _em_prefix=$(_em_app_prefix "$_em_app_name")
   while (( !_EM_UI_INTERRUPTED )); do
-    _em_screen 'Variable naming' '1. Original name (recommended)' "2. Prefix with $prefix" ''
-    _em_read naming 'Choose an option [1]: ' || return
-    case ${naming:-1} in
-      1) naming=original; break ;;
-      2) naming=prefixed; break ;;
+    _em_screen 'Variable naming' '1. Original name (recommended)' "2. Prefix with $_em_prefix" ''
+    _em_read _em_naming 'Choose an option [1]: ' || return
+    case ${_em_naming:-1} in
+      1) _em_naming=original; break ;;
+      2) _em_naming=prefixed; break ;;
       *) ;;
     esac
   done
 
   while (( !_EM_UI_INTERRUPTED )); do
-    _em_screen 'Add or update variables' "Application: $app" "Naming: $naming" ''
-    _em_read input_key 'Variable name: ' || return
-    if ! _em_valid_key "$input_key"; then
+    _em_screen 'Add or update variables' "Application: $_em_app_name" "Naming: $_em_naming" ''
+    _em_read _em_input_key 'Variable name: ' || return
+    if ! _em_valid_key "$_em_input_key"; then
       _em_screen 'Invalid variable name' \
         'Use letters, numbers, and underscores.' \
         'Do not start with a number.' ''
       _em_pause
       continue
     fi
-    if [[ $naming == prefixed ]]; then
-      key=${prefix}${input_key}
+    if [[ $_em_naming == prefixed ]]; then
+      _em_var_name=${_em_prefix}${_em_input_key}
     else
-      key=$input_key
+      _em_var_name=$_em_input_key
     fi
-    if [[ -v _EM_APP[$key] ]]; then
-      if [[ ${_EM_APP[$key]} != "$app" ]]; then
+    if [[ -v _EM_APP[$_em_var_name] ]]; then
+      if [[ ${_EM_APP[$_em_var_name]} != "$_em_app_name" ]]; then
         _em_screen 'Variable already managed' \
-          "$key belongs to ${_EM_APP[$key]}." ''
+          "$_em_var_name belongs to ${_EM_APP[$_em_var_name]}." ''
         _em_pause
         continue
       fi
-      _em_screen 'Replace variable' "Exported name: $key" ''
-      _em_confirm "$key already exists. Replace it?" || continue
+      _em_screen 'Replace variable' "Exported name: $_em_var_name" ''
+      _em_confirm "$_em_var_name already exists. Replace it?" || continue
     fi
 
     while (( !_EM_UI_INTERRUPTED )); do
-      _em_screen 'Set variable' "Application: $app" "Exported name: $key" ''
-      _em_read answer 'Is this value secret? [y/n] ' || return
-      [[ $answer == [yYnN] ]] && break
+      _em_screen 'Set variable' "Application: $_em_app_name" "Exported name: $_em_var_name" ''
+      _em_read _em_answer 'Is this value secret? [y/n] ' || return
+      [[ $_em_answer == [yYnN] ]] && break
       _em_screen 'Invalid selection' 'Enter y or n.' ''
       _em_pause
     done
-    if [[ $answer == [yY] ]]; then
-      secret=1
-      _em_read value 'Value: ' 1 || return
+    if [[ $_em_answer == [yY] ]]; then
+      _em_secret=1
+      _em_read _em_value 'Value: ' 1 || return
       printf '\n'
     else
-      secret=0
-      _em_read value 'Value: ' || return
+      _em_secret=0
+      _em_read _em_value 'Value: ' || return
     fi
 
-    if em_set "$app" "$key" "$value" "$secret"; then
-      _em_screen 'Variable exported' "$key is active in this shell." ''
+    if em_set "$_em_app_name" "$_em_var_name" "$_em_value" "$_em_secret"; then
+      _em_screen 'Variable exported' "$_em_var_name is active in this shell." ''
     fi
     _em_confirm 'Add another variable to this application?' || break
   done
 }
 
 _em_choose_key() {
-  local app=${1-} key choice index=1
-  local -a choices=() lines=()
-  for key in "${_EM_KEY_ORDER[@]}"; do
-    [[ -v _EM_APP[$key] ]] || continue
-    [[ -z $app || ${_EM_APP[$key]} == "$app" ]] || continue
-    choices+=("$key")
-    lines+=("$index. $key (${_EM_APP[$key]})")
-    ((index++))
+  local _em_app_name=${1-} _em_var_name _em_choice _em_index=1
+  local -a _em_choices=() _em_lines=()
+  for _em_var_name in "${_EM_KEY_ORDER[@]}"; do
+    [[ -v _EM_APP[$_em_var_name] ]] || continue
+    [[ -z $_em_app_name || ${_EM_APP[$_em_var_name]} == "$_em_app_name" ]] || continue
+    _em_choices+=("$_em_var_name")
+    _em_lines+=("$_em_index. $_em_var_name (${_EM_APP[$_em_var_name]})")
+    ((_em_index++))
   done
-  ((${#choices[@]})) || return 1
-  lines+=('' 'B. Back')
-  _em_screen 'Choose a variable' "${lines[@]}" ''
-  _em_read choice 'Choose a variable: ' || return 2
-  [[ $choice == [bB] ]] && return 2
-  [[ $choice =~ ^[0-9]+$ && choice -ge 1 && choice -le ${#choices[@]} ]] || return 1
-  REPLY=${choices[choice-1]}
+  ((${#_em_choices[@]})) || return 1
+  _em_lines+=('' 'B. Back')
+  _em_screen 'Choose a variable' "${_em_lines[@]}" ''
+  _em_read _em_choice 'Choose a variable: ' || return 2
+  [[ $_em_choice == [bB] ]] && return 2
+  [[ $_em_choice =~ ^[0-9]+$ && _em_choice -ge 1 && _em_choice -le ${#_em_choices[@]} ]] || return 1
+  REPLY=${_em_choices[_em_choice-1]}
 }
 
 _em_choose_app() {
-  local app choice index=1
-  local -a choices=() lines=()
-  for app in "${_EM_APP_ORDER[@]}"; do
-    _em_has_app "$app" || continue
-    choices+=("$app")
-    lines+=("$index. $app")
-    ((index++))
+  local _em_app_name _em_choice _em_index=1
+  local -a _em_choices=() _em_lines=()
+  for _em_app_name in "${_EM_APP_ORDER[@]}"; do
+    _em_has_app "$_em_app_name" || continue
+    _em_choices+=("$_em_app_name")
+    _em_lines+=("$_em_index. $_em_app_name")
+    ((_em_index++))
   done
-  ((${#choices[@]})) || return 1
-  lines+=('' 'B. Back')
-  _em_screen 'Choose an application' "${lines[@]}" ''
-  _em_read choice 'Choose an application: ' || return 2
-  [[ $choice == [bB] ]] && return 2
-  [[ $choice =~ ^[0-9]+$ && choice -ge 1 && choice -le ${#choices[@]} ]] || return 1
-  REPLY=${choices[choice-1]}
+  ((${#_em_choices[@]})) || return 1
+  _em_lines+=('' 'B. Back')
+  _em_screen 'Choose an application' "${_em_lines[@]}" ''
+  _em_read _em_choice 'Choose an application: ' || return 2
+  [[ $_em_choice == [bB] ]] && return 2
+  [[ $_em_choice =~ ^[0-9]+$ && _em_choice -ge 1 && _em_choice -le ${#_em_choices[@]} ]] || return 1
+  REPLY=${_em_choices[_em_choice-1]}
 }
 
 _em_delete_menu() {
-  local choice target listing status
+  local _em_choice _em_target _em_listing _em_status
   while (( !_EM_UI_INTERRUPTED )); do
-    listing=$(_em_list)
-    _em_screen 'Delete variables' "$listing" '' \
+    _em_listing=$(_em_list)
+    _em_screen 'Delete variables' "$_em_listing" '' \
       '1. Variable' '2. Application/system' '3. All' '' 'B. Back' ''
-    _em_read choice 'Choose an option: ' || return
-    case $choice in
+    _em_read _em_choice 'Choose an option: ' || return
+    case $_em_choice in
       1)
         _em_choose_key
-        status=$?
-        ((status == 2)) && continue
-        ((status == 0)) || { printf 'No selection made.\n'; continue; }
-        target=$REPLY
-        _em_confirm "Restore and remove $target?" && em_delete_key "$target"
+        _em_status=$?
+        ((_em_status == 2)) && continue
+        ((_em_status == 0)) || { printf 'No selection made.\n'; continue; }
+        _em_target=$REPLY
+        _em_confirm "Restore and remove $_em_target?" && em_delete_key "$_em_target"
         ;;
       2)
         _em_choose_app
-        status=$?
-        ((status == 2)) && continue
-        ((status == 0)) || { printf 'No selection made.\n'; continue; }
-        target=$REPLY
-        _em_confirm "Restore all variables under $target?" && em_delete_app "$target"
+        _em_status=$?
+        ((_em_status == 2)) && continue
+        ((_em_status == 0)) || { printf 'No selection made.\n'; continue; }
+        _em_target=$REPLY
+        _em_confirm "Restore all variables under $_em_target?" && em_delete_app "$_em_target"
         ;;
       3)
         if _em_confirm 'Restore and remove ALL managed variables?'; then
@@ -512,7 +538,7 @@ _em_delete_menu() {
 }
 
 env_manager() {
-  local choice listing
+  local _em_choice _em_listing
   _em_ui_start
   while (( !_EM_UI_INTERRUPTED )); do
     _em_screen 'Environment Manager' \
@@ -520,11 +546,11 @@ env_manager() {
       '2. Add or update variables' \
       '3. Delete variables' \
       '' 'E. Exit menu' ''
-    _em_read choice 'Choose an option: ' || break
-    case $choice in
+    _em_read _em_choice 'Choose an option: ' || break
+    case $_em_choice in
       1)
-        listing=$(_em_list)
-        _em_screen 'Managed variables' "$listing" ''
+        _em_listing=$(_em_list)
+        _em_screen 'Managed variables' "$_em_listing" ''
         _em_pause
         ;;
       2) _em_add_menu ;;

@@ -325,3 +325,105 @@ Include:
 - A short final recommendation: accept, revise, or reject commit `258511d`.
 
 Do not report purely stylistic preferences as security findings.
+
+## Second-pass response to eeb33a5
+
+Review commit: `eeb33a5` (`Record review of the 258511d hardening pass`)
+
+The open O1-O4 findings were accepted. The implementation also protects the
+restore path and removes generic internal function-local names after additional
+dynamic-scope testing.
+
+### O1 - Parent-trap TTY restoration
+
+Status claimed: addressed.
+
+- `_em_ui_start` captures the exact pre-menu TTY mode with `_em_stty -g` before
+  checking for parent `INT` or `TERM` traps.
+- Parent traps are still not replaced. That path still uses plain output.
+- `_em_read` restores the captured mode immediately after every silent read.
+- `_em_ui_stop` restores the captured mode again as defensive cleanup.
+- Restoration uses the saved mode rather than unconditionally running
+  `stty echo`, so a sourced script does not alter an intentionally unusual
+  parent TTY configuration.
+
+Manual pseudo-terminal validation covered an interrupt during `read -s` with a
+parent INT trap. The parent trap remained byte-for-byte unchanged and the TTY
+mode after menu exit matched the mode captured before sourcing.
+
+### O2 - Sticky interrupt state
+
+Status claimed: addressed.
+
+- `_EM_UI_INTERRUPTED` is reset at the beginning of `_em_ui_start`, before the
+  non-TTY and parent-trap early returns.
+- `_em_ui_stop` also clears it.
+- Tests exercise reset during the parent-trap fallback and cleanup path.
+
+### O3 - Loader, locale, and geometry names
+
+Status claimed: addressed.
+
+`_em_safe_key` now also rejects:
+
+- `GCONV_PATH`, `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`
+- `BASH_LOADABLES_PATH`
+- `LANG`, every `LC_*` name
+- `COLUMNS`, `LINES`
+
+Tests retain positive cases for `OPENAI_API_KEY`, `email`, and `EM_APP_PATH`.
+
+### O4 - Attribute changes after first management
+
+Status claimed: addressed and extended to restoration.
+
+- `_em_safe_attributes` centralizes declaration flag parsing.
+- `em_set` calls it on every set, including updates.
+- `_em_restore_key` calls it before assignment or unset.
+- If a managed scalar is externally replaced by an array, read-only variable,
+  or nameref, update and deletion both refuse without touching a nameref target.
+- After the caller removes the incompatible declaration, deletion can restore
+  the original state normally.
+
+This restore-path check goes beyond O4's stated update case. Without it,
+`em_delete_key` could assign or unset through a replacement nameref.
+
+### Internal dynamic-scope cleanup
+
+Bash function locals are dynamically scoped. Generic locals in the TUI such as
+`app`, `key`, `value`, and `target` could therefore shadow a requested managed
+name during the nested `em_set` call. Internal locals were renamed into the
+reserved `_em_*` namespace, which managed keys are already forbidden to use.
+
+Residual API limitation: if an external caller invokes the public API from its
+own function while that caller has a local variable identical to the requested
+key, Bash does not provide a direct `declare -p` operation that ignores the
+dynamically visible local and inspects only the global declaration. The normal
+interactive path no longer creates such collisions.
+
+### Second-pass validation
+
+Automated:
+
+```bash
+bash -n env-manager.sh
+bash -n tests/env-manager-test.sh
+bash tests/env-manager-test.sh
+bash env-manager.sh
+```
+
+Expected: syntax and tests pass; direct execution returns status 1 with the
+source hint.
+
+Manual pseudo-terminal checks performed:
+
+- INT at the main menu restores the alternate screen, clears owned traps, and
+  permits the shell to continue.
+- INT during secret input on the owned-trap path restores terminal state and
+  unwinds the menu.
+- INT during secret input with a parent trap preserves that trap; after input
+  completes, the exact pre-menu TTY mode is restored.
+
+Requested follow-up review: independently verify O1-O4, especially TERM during
+silent input and update/delete behavior after replacing a managed scalar with
+arrays or read-only declarations. Report findings before editing.
