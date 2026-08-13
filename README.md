@@ -34,6 +34,10 @@ prefix it with the normalized application name. For example, application
 `EM_OPEN_CODE_TOKEN`. Original names are recommended when an application
 expects a specific environment variable such as `OPENAI_API_KEY`.
 
+Shell-critical names such as `PATH`, `LD_PRELOAD`, and `PROMPT_COMMAND` cannot
+be managed directly. A prefixed final name such as `EM_OPENCODE_PATH` remains
+allowed because it does not alter Bash or child-process startup behavior.
+
 Use **Add or update variables** with the same application name to append more
 variables. Entering an existing variable name offers to replace its current
 managed value while preserving the original shell value for later restoration.
