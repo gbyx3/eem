@@ -540,6 +540,23 @@ _em_delete_menu() {
   done
 }
 
+_em_launch() {
+  local _em_name=$1 _em_executable _em_status
+  _em_executable=$(type -P "$_em_name")
+  if [[ -z $_em_executable ]]; then
+    _em_screen 'Application unavailable' \
+      "Could not find $_em_name in PATH." ''
+    _em_pause
+    return 127
+  fi
+
+  _em_ui_stop
+  "$_em_executable"
+  _em_status=$?
+  _em_ui_start
+  return "$_em_status"
+}
+
 env_manager() {
   local _em_choice _em_listing
   _em_ui_start
@@ -548,6 +565,8 @@ env_manager() {
       '1. List variables' \
       '2. Add or update variables' \
       '3. Delete variables' \
+      '4. Launch OpenCode' \
+      '5. Launch Grok' \
       '' 'E. Exit menu' ''
     _em_read _em_choice 'Choose an option: ' || break
     case $_em_choice in
@@ -558,6 +577,8 @@ env_manager() {
         ;;
       2) _em_add_menu ;;
       3) _em_delete_menu ;;
+      4) _em_launch opencode ;;
+      5) _em_launch grok ;;
       [eE]) break ;;
       *) ;;
     esac

@@ -153,6 +153,16 @@ _em_ui_stop
 assert_eq "$(trap -p INT)" "$parent_int_trap" 'UI stop preserves parent INT trap'
 trap - INT
 
+_EM_UI_INTERRUPTED=1
+_em_launch true
+assert_eq "$?" 0 'available application launches successfully'
+assert_eq "$_EM_UI_INTERRUPTED" 0 'manager restarts after application exits'
+
+if _em_launch EM_TEST_COMMAND_THAT_DOES_NOT_EXIST >/dev/null 2>&1 <<< ''; then
+  printf 'FAIL: unavailable application returns failure\n' >&2
+  ((failures++))
+fi
+
 empty_app_output=$(_em_add_menu <<< '')
 [[ $empty_app_output == *'Application name is required'* ]] || {
   printf 'FAIL: empty application returns from add menu\n' >&2

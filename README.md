@@ -18,8 +18,9 @@ scrollback, and the original terminal screen is restored when the menu exits.
 Every view uses a fixed-width ASCII frame; long names and values wrap within
 the frame instead of resizing it.
 
-Choose **Exit menu** when configuration is complete, then start the application
-from the same shell:
+OpenCode or Grok can be launched directly from the main menu after configuring
+the environment. The manager returns when the application exits. Alternatively,
+choose **Exit menu** and start an application from the same shell:
 
 ```bash
 opencode
