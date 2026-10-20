@@ -565,6 +565,7 @@ env_manager() {
       '1. List variables' \
       '2. Add or update variables' \
       '3. Delete variables' \
+      '' \
       '4. Launch OpenCode' \
       '5. Launch Grok' \
       '' 'E. Exit menu' ''
