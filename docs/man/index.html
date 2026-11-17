@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EEM(1) — Ephemeral Environment Manager</title>
+  <meta name="description" content="Manual for EEM, a sourced Bash menu for temporary, application-grouped environment variables.">
+  <link rel="stylesheet" href="../style/manual.css">
+</head>
+<body>
+<main>
+<article>
+  <header class="manual-header">
+    <h1>EEM(1)</h1>
+    <p>User Commands</p>
+    <span class="repeat-label" aria-hidden="true">EEM(1)</span>
+  </header>
+  <section aria-labelledby="name">
+    <h2 id="name">NAME</h2>
+    <p>eem — Ephemeral Environment Manager for the current Bash shell</p>
+  </section>
+  <section aria-labelledby="synopsis">
+    <h2 id="synopsis">SYNOPSIS</h2>
+    <pre><code>source env-manager.sh</code></pre>
+    <p>Requires <strong>Bash 4 or newer</strong>. Source the script in the shell whose environment you want to configure. Direct execution is refused because it cannot update the calling shell.</p>
+  </section>
+  <section aria-labelledby="description">
+    <h2 id="description">DESCRIPTION</h2>
+    <p>EEM is an interactive menu for exporting temporary environment variables, grouped by application or system. It records each managed variable’s original value and export state so that deleting it can restore the previous shell state.</p>
+    <p>In an interactive terminal, the menu normally uses the alternate screen with centered, fixed-width frames. Exiting restores the original terminal screen. Source the script again to reopen the menu without discarding existing management records.</p>
+  </section>
+  <section aria-labelledby="menu">
+    <h2 id="menu">MENU</h2>
+    <dl>
+      <dt><strong>1. List variables</strong></dt>
+      <dd>Show managed variables grouped by application. Secret values are masked; other values are displayed.</dd>
+      <dt><strong>2. Add or update variables</strong></dt>
+      <dd>Choose an application, naming mode, variable name, and whether the value is secret. Reuse an application name to add more variables. Replacing an existing managed value requires confirmation and retains its original restoration state. A name already managed under another application is refused.</dd>
+      <dt><strong>3. Delete variables</strong></dt>
+      <dd>Restore and stop managing one variable, an application’s variables, or all managed variables, after confirmation.</dd>
+      <dt><strong>4. Launch OpenCode</strong></dt>
+      <dd>Run the <code>opencode</code> executable found in the command search path. Return to the menu when it exits.</dd>
+      <dt><strong>5. Launch Grok</strong></dt>
+      <dd>Run the <code>grok</code> executable found in the command search path. Return to the menu when it exits.</dd>
+      <dt><strong>E. Exit menu</strong></dt>
+      <dd>Return to the current shell, keeping the exported variables active.</dd>
+    </dl>
+  </section>
+  <section aria-labelledby="variable-naming">
+    <h2 id="variable-naming">VARIABLE NAMING</h2>
+    <p><strong>The default and recommended choice is the original variable name.</strong> For example, group <code>SLACK_BOT_TOKEN</code> under Slack and <code>OPENAI_API_KEY</code> under OpenAI. Application grouping does not rename these variables unless you select prefixing.</p>
+    <p>The optional naming mode prepends <code>EM_&lt;APP&gt;_</code> to the name you enter. The application name is uppercased, non-letter/non-digit/non-underscore characters become underscores, repeated underscores are collapsed, and leading or trailing underscores are removed. An empty normalized name becomes <code>APP</code>.</p>
+    <p>For example, entering <code>BOT_TOKEN</code> under Slack in prefixed mode produces <code>EM_SLACK_BOT_TOKEN</code>; entering <code>API_KEY</code> under OpenAI produces <code>EM_OPENAI_API_KEY</code>. Prefixing does not create an alias for the original name. Use it only when the consuming program accepts that exported name.</p>
+    <p>Variable names must match <code>[A-Za-z_][A-Za-z0-9_]*</code>: letters, digits, and underscores, without a leading digit. Application names must be nonempty and must not contain control characters.</p>
+  </section>
+  <section aria-labelledby="secrets">
+    <h2 id="secrets">SECRETS</h2>
+    <p>Marking a value as secret hides terminal input and replaces its value with <code>********</code> in EEM listings. Nonsecret input is visible.</p>
+    <p><strong>Masking is not encryption.</strong> Values remain ordinary shell variables exported to child processes. EEM writes neither entered values nor its management records to disk; it provides no persistent secret store. This does not prevent another program or the operating system from recording data.</p>
+  </section>
+  <section aria-labelledby="reserved-names">
+    <h2 id="reserved-names">RESERVED NAMES</h2>
+    <p>EEM rejects shell-critical names affecting command lookup, loader behavior, shell startup, prompts, history, locale, terminal dimensions, and Bash execution state. Examples include <code>PATH</code>, <code>LD_PRELOAD</code>, <code>BASH_ENV</code>, <code>PROMPT_COMMAND</code>, <code>LANG</code>, and names matching <code>LC_*</code>.</p>
+    <p>Its own namespaces, <code>_EM_*</code>, <code>_em_*</code>, <code>em_*</code>, and <code>env_manager</code>, are also reserved. Arrays, read-only variables, and name references cannot be managed. Validation applies to the final exported name; an optional prefix can yield an allowed name without modifying the shell-critical variable itself.</p>
+  </section>
+  <section aria-labelledby="restoring">
+    <h2 id="restoring">RESTORING</h2>
+    <p>On first managing a variable, EEM remembers whether it existed, its value, and whether it was exported. Subsequent updates preserve that original snapshot.</p>
+    <p>Deleting a managed variable restores its original value and export state, or unsets it if it did not previously exist. Application deletion and Delete All apply this restoration only to managed variables; unrelated variables are untouched.</p>
+    <p>Restoration refuses incompatible declarations, including arrays, read-only variables, and name references. Resolve the incompatible declaration before retrying; EEM does not write through a name reference.</p>
+  </section>
+  <section aria-labelledby="launching-agents">
+    <h2 id="launching-agents">LAUNCHING AGENTS</h2>
+    <p><strong>OpenCode and Grok do not need to be launched from the menu.</strong> Configure the environment, choose <strong>E. Exit menu</strong>, then start the agent in that same shell:</p>
+    <pre><code>source env-manager.sh
+# Configure variables, then choose E to exit the menu.
+opencode
+# Or, instead:
+grok</code></pre>
+    <p>Exiting the menu keeps the variables. The agent must be started in the same shell to inherit them; a separate terminal or an already-running agent does not receive those changes automatically.</p>
+    <p>Closing the shell clears its variables and EEM’s in-memory records. It does not revoke credentials or erase environment copies already inherited by running child processes. Likewise, restoring a variable in the shell does not change an existing child process’s environment.</p>
+  </section>
+  <section aria-labelledby="security">
+    <h2 id="security">SECURITY</h2>
+    <p>Exports are session-wide, not restricted to the application group shown in the menu. Child processes inherit exported values, including secrets. Treat programs launched from this shell as trusted recipients and export only what they need.</p>
+    <p>EEM validates names and assigns values without <code>eval</code>. Display sanitization removes control characters without changing stored values, but is not a complete defense against misleading Unicode text.</p>
+    <p>The menu restores saved terminal settings and preserves existing interrupt and termination traps, using a plain interface when those traps are present. Abrupt shell termination can bypass normal menu cleanup.</p>
+    <p>EEM does not encrypt memory, securely wipe the Bash heap after deletion, hide process environments, or provide multi-user access control. Hidden input and masked listings reduce accidental display, not access by the current user or privileged software.</p>
+  </section>
+  <section aria-labelledby="see-also">
+    <h2 id="see-also">SEE ALSO</h2>
+    <p><code>opencode(1)</code>, <a href="../clip/">CLIP(7)</a>.</p>
+  </section>
+</article>
+</main>
+<footer class="manual-footer"><a href="../">projects(7)</a><span>Ephemeral Environment Manager</span><span>EEM(1)</span></footer>
+</body>
+</html>
